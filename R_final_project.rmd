@@ -1,0 +1,653 @@
+---
+title: "Data Analysis overview of Telangana Tourism"
+author: "By Nitin Madas, Kaushal Joshi"
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Telangana
+![][telangana_intro]
+
+
+# Data Description
+![][data_desc]
+
+```{r include=FALSE}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+```
+```{r eval=FALSE}
+# Getting data from different csv files and combining them into one file
+
+input_path = './%s_%s.csv'
+
+domestic_path = 'domestic_visitors/domestic_visitors'
+foreign_path = 'foreign_visitors/foreign_visitors'
+
+all_domestic_data <- data.frame()
+all_foreign_data <- data.frame()
+
+
+for( year in years){
+  file_path_domestic = sprintf(input_path, domestic_path, year)
+  all_domestic_data =  rbind(all_domestic_data, read.csv(file_path_domestic))
+  
+  file_path_foreign = sprintf(input_path, foreign_path, year)
+  all_foreign_data =  rbind(all_foreign_data, read.csv(file_path_foreign))
+  
+}
+
+output_path = './%s.csv'
+
+write.csv(all_domestic_data, sprintf(output_path, domestic_path), row.names=F)
+write.csv(all_foreign_data, sprintf(output_path, foreign_path), row.names=F)
+
+
+```
+```{r}
+# Loading data sets
+domestic_vis = read.csv('./domestic_visitors/domestic_visitors.csv')
+foreign_vis = read.csv('./foreign_visitors/foreign_visitors.csv')
+
+head(domestic_vis)
+head(foreign_vis)
+```
+
+
+
+# Data Cleaning
+``` {r include=FALSE}
+total_val = nrow(domestic_vis)
+null_val = sum(is.na(domestic_vis))
+percent = null_val/total_val *100
+
+total_val_fore = nrow(foreign_vis)
+null_val_fore = sum(is.na(foreign_vis))
+percent_fore = null_val_fore/total_val_fore *100
+```
+#### In Domestic visitors, There are **`r null_val`** Null Values out of **`r total_val`** Values   
+#### So, there are **`r  round(percent,2)`%** Null values
+
+#### In Foreign visitors, There are **`r null_val_fore`** Null Values out of **`r total_val_fore`** Values   
+#### So, there are **`r  round(percent_fore,2)`%** Null values
+```{r warning=FALSE}
+# Lets try to understand where these null values reside in our data
+null_vis <- domestic_vis[is.na(domestic_vis$visitors), ]
+
+
+# Group the data and count occurrences
+count_data <- null_vis %>%
+  group_by(district, year) %>%
+  summarize(count = n())
+
+# count_data %>% as_tibble() %>% print(n=40)
+
+
+# Create the stacked bar plot
+dom_plot = ggplot(count_data, aes(x = district, y = count, fill = as.factor(year)  ) )+
+  geom_bar(stat = "identity",color = "black") +
+    geom_text(aes(label = count, group = year), position = position_stack(vjust = 0.5)) +
+  scale_y_continuous(breaks = seq(0, 50, by = 12)) +
+
+  labs(x = "District", y = "Count", title = "Domestic Missing Values") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Lets try to understand where these null values reside in our data
+null_vis_fore <- foreign_vis[is.na(foreign_vis$visitors), ]
+
+
+# Group the data and count occurrences
+count_data_fore <- null_vis_fore %>%
+  group_by(district, year) %>%
+  summarize(count = n())
+
+fore_plot = ggplot(count_data_fore, aes(x = district, y = count, fill = as.factor(year)  ) )+
+  geom_bar(stat = "identity",color = "black") +
+    geom_text(aes(label = count, group = year), position = position_stack(vjust = 0.5)) +
+  scale_y_continuous(breaks = seq(0, 50, by = 12)) +
+
+  labs(x = "District", y = "Count", title = "Foreign Missing Values") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+dom_plot
+fore_plot
+
+
+```
+
+#### Cleaning and Imputing the significant values
+```{r}
+calculate_missing_percentage <- function(data, group_columns, value_column) {
+  # Calculate missing values per specified group columns
+  missing_data <- data %>% 
+    group_by(across(all_of(group_columns))) %>% 
+    summarize(
+      total_rows = n(),
+      missing_values = sum(is.na({{ value_column }}))
+    )
+  
+  # Calculate missing percentage
+  missing_data <- missing_data %>%
+    mutate(missing_percentage = (missing_values / total_rows) * 100)
+  
+  # Filter rows with missing percentage equal to 100%
+  missing_all_values <- missing_data %>%
+    filter(missing_percentage >25)
+  
+  return(missing_all_values)
+}
+```
+```{r}
+result_district <- calculate_missing_percentage(domestic_vis, c("district"), visitors)
+result_foreign <- calculate_missing_percentage(foreign_vis, c("district"), visitors)
+result_district_year_month <- calculate_missing_percentage(domestic_vis, c("month","year"), visitors)
+result_district
+result_foreign
+```
+#### We will delete the insignificant districts from the data i.e. districts which has more than 75% missing values
+```{r}
+districts_above_threshold_d <- result_district %>%
+  filter(missing_percentage >= 75) %>%
+  pull(district)  # Get the list of districts to remove for domestic_vis
+
+districts_above_threshold_f <- result_foreign %>%
+  filter(missing_percentage >= 75) %>%
+  pull(district)  # Get the list of districts to remove for foreign_vis
+
+# Remove rows from 'domestic_vis' where districts have >= 75% missing values
+cleaned_domestic_vis <- domestic_vis %>%
+  filter(!(district %in% districts_above_threshold_d))
+sum(is.na(cleaned_domestic_vis$visitors))
+
+# Remove rows from 'foreign_vis' where districts have >= 75% missing values
+cleaned_foreign_vis <- foreign_vis %>%
+  filter(!(district %in% districts_above_threshold_f))
+sum(is.na(cleaned_foreign_vis$visitors))
+```
+```{r}
+plot_before_after_NA <- function(data_with_na, data_without_na,main1=NULL) {
+  # Histogram of visitors with NA values
+  df_with_na <- ggplot(data = data_with_na, aes(x = visitors)) +
+    geom_histogram(fill = "skyblue", color = "black", bins = 30, na.rm = FALSE) +
+    labs(title = "Distribution of Visitors with Null Values", x = "Visitors") +
+    theme_minimal() +ggtitle(main1) 
+  
+  # Histogram of visitors after removing NA values
+  df_without_na <- ggplot(data = data_without_na, aes(x = visitors)) +
+    geom_histogram(fill = "skyblue", color = "black", bins = 30, na.rm = TRUE) +
+    labs(title = "Distribution of Visitors after removing Null Values", x = "Visitors") +
+    theme_minimal() + ggtitle(main1)
+  
+  # Combine both histograms into a single plot using facets
+  combined_plot <- cowplot::plot_grid(
+    df_with_na + facet_wrap(~ "With Null Values"),
+    df_without_na + facet_wrap(~ "Without Null Values"),
+    ncol = 2
+  )
+  
+  # Display the combined plot
+  print(combined_plot)
+}
+
+# Example usage of the function with your dataframes
+plot_before_after_NA(domestic_vis, cleaned_domestic_vis , "Distribution plot for domestic_visitors")
+plot_before_after_NA(foreign_vis, cleaned_foreign_vis , "Distribution plot for foreign_visitors")
+
+```
+
+```{r}
+total_rows_clean_d <- nrow(cleaned_domestic_vis)
+total_rows_clean_f <- nrow(cleaned_foreign_vis)
+
+total_missing_clean_d <- sum(is.na(cleaned_domestic_vis$visitors))
+total_missing_clean_f <- sum(is.na(cleaned_foreign_vis$visitors))
+
+percentage_missing_clean_d <- (total_missing_clean_d / total_rows_clean_d) * 100
+percentage_missing_clean_f <- (total_missing_clean_f / total_rows_clean_f) * 100
+# paste(percentage_missing_clean_d,"Remaining missing values for domestic_vis")
+# paste(percentage_missing_clean_f,"Remaining missing values for foreign_vis")
+
+```
+#### But even after removing those districts with null values we have **`r round(percentage_missing_clean_d,2)`%** null values remaining.
+#### Similarly even after removing those districts with null values we have **``r round(percentage_missing_clean_f,2)`%** null values remaining.
+
+#### So we will impute the data with the Mean with respect to districts.
+#### And then we will again plot distribution of data to make sure imputation doesn't change the distribution of original data.
+
+
+```{r}
+# mean_visitors_d <- mean(cleaned_domestic_vis$visitors, na.rm = TRUE)
+# mean_visitors_f <- mean(cleaned_foreign_vis$visitors, na.rm = TRUE)
+# 
+# cleaned_domestic_vis$visitors[is.na(cleaned_domestic_vis$visitors)] <- mean_visitors_d
+# cleaned_foreign_vis$visitors[is.na(cleaned_foreign_vis$visitors)] <- mean_visitors_f
+# 
+# imputed_data_d = cleaned_domestic_vis
+# imputed_data_f = cleaned_foreign_vis
+
+# imputed_data_d <- cleaned_domestic_vis %>%
+#   group_by(district) %>%
+#   mutate(visitors = ifelse(is.na(visitors), mean(visitors, na.rm = TRUE), visitors))
+# 
+# imputed_data_f <- cleaned_foreign_vis %>%
+#   group_by(district) %>%
+#   mutate(visitors = ifelse(is.na(visitors), mean(visitors, na.rm = TRUE), visitors))
+
+# imputed_data_d <- cleaned_domestic_vis %>%
+#   group_by(district, year) %>%
+#   mutate(visitors = ifelse(is.na(visitors), mean(visitors, na.rm = TRUE), visitors))
+# 
+# imputed_data_f <- cleaned_foreign_vis %>%
+#   group_by(district, year) %>%
+#   mutate(visitors = ifelse(is.na(visitors), mean(visitors, na.rm = TRUE), visitors))
+
+imputed_data_d <- cleaned_domestic_vis %>%
+  group_by(district) %>%
+  mutate(visitors = ifelse(is.na(visitors), round(mean(visitors[year == 2017], na.rm = TRUE)), visitors))
+
+imputed_data_f <- cleaned_foreign_vis %>%
+  group_by(district) %>%
+  mutate(visitors = ifelse(is.na(visitors), round(mean(visitors[year == 2017], na.rm = TRUE)), visitors))
+
+
+plot_before_after_NA(cleaned_domestic_vis , imputed_data_d ,"Distribution for Imputed Domestic_vis")
+plot_before_after_NA(cleaned_foreign_vis , imputed_data_f , "Distribution for Imputed Foreign_vis")
+
+```
+
+```{r}
+total_missing_values_d <- sum(is.na(imputed_data_d$visitors))
+paste(total_missing_values_d, "null values in domestic_vis")
+domestic_vis = imputed_data_d
+
+
+total_missing_values_f <- sum(is.na(imputed_data_f$visitors))
+paste(total_missing_values_f, "null values in foreign_vis")
+foreign_vis = imputed_data_f
+
+```
+
+
+# Data Analysis
+### Top 10 Districts with highest visitors
+```{r}
+
+#Creating a function to get top 10 districts and bar plot 
+top_10_districts =function( visitors_df,type="domestic"){
+  
+  # Group by district, calculate the sum of visitors, and select the top 10 districts
+
+  top_10_districts_df <- visitors_df %>%
+  group_by(district) %>%
+  summarise(total_visitors = sum(visitors,na.rm = T)) %>%
+  arrange(desc(total_visitors)) %>%
+  head(10)
+  
+  # convert into million on for domestic visitors
+  if (type=="domestic"){
+    top_10_districts_df$total_visitors <- top_10_districts_df$total_visitors / 1000000
+
+  }
+  
+  bar_plot =ggplot(top_10_districts_df, aes(x = reorder(district,-total_visitors), y = total_visitors)) +
+  geom_bar(stat = "identity", fill = "skyblue",color='black') +
+  # scale_y_continuous(labels = scales::comma) +
+  labs(title = "Top 10 Districts by Total Domestic Visitors", 
+          x = "District", y = "Total Visitors (in Millions)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+
+  
+  return( list("df"= top_10_districts_df,"bar_plot"=bar_plot))
+}
+dom_top_10_dis = top_10_districts(domestic_vis)
+print(dom_top_10_dis$bar_plot)
+
+fore_top_10_dis = top_10_districts(foreign_vis,type="foreign")
+print(fore_top_10_dis$df)
+
+
+```
+### Top and Bottom 3 CAGR districts for domestic visitors
+
+```{r}
+total_vis_year <- domestic_vis %>%
+  group_by(district, year) %>%
+  summarise(visitors = sum(visitors, na.rm = T))
+
+# Get unique districts for the year 2016
+districts <- domestic_vis %>%
+  filter(year == 2016) %>%
+  select(district) %>%
+  distinct() %>%
+  pull()
+
+# Function to calculate CAGR
+calculate_cagr <- function(district_name) {
+  fv <- total_vis_year %>% filter(district == district_name & year == 2019) %>% pull(visitors)
+  pv <- total_vis_year %>% filter(district == district_name & year == 2016) %>% pull(visitors)
+
+
+  if ( pv != 0) {
+    cagr <- ((fv/pv)^(1/3) - 1) * 100
+    return(c(district = district_name, cagr = round(cagr,2)))
+  } else {
+    return(c(district = district_name, cagr = 0) )
+  }
+}
+
+# Apply the function to each district
+cagr_list <- map_df(districts, calculate_cagr)
+
+# Create a data frame from the list
+district_cagr <- as.data.frame(cagr_list)
+district_cagr$cagr = as.numeric(district_cagr$cagr)
+
+# Get top and bottom 3 districts by CAGR
+top3_districts_cagr <- district_cagr %>% arrange(desc(cagr)) %>% slice_head(n = 3)
+bottom3_districts_cagr <- district_cagr %>% arrange(cagr) %>% slice_head(n = 3)
+
+# Print the results
+```
+##### Top 3 Districts by CAGR:
+```{r echo=F} 
+print(top3_districts_cagr)
+
+ggplot(top3_districts_cagr, aes(x= reorder(district,-cagr),y=cagr))+
+  geom_bar(stat='identity',fill='lightgreen',color='black')+
+  labs(x='District',y='CAGR') +
+    geom_text(aes(label = paste0(cagr,'%')), vjust = -0.5, color = "black", size = 5) +
+
+    theme_minimal() +
+  theme(panel.grid.minor = element_blank()) # Remove grid lines
+
+
+```
+
+##### Bottom 3 Districts by CAGR:
+```{r echo=F} 
+print(bottom3_districts_cagr)
+ggplot(bottom3_districts_cagr, aes(x= reorder(district,cagr),y=cagr))+
+  geom_bar(stat='identity',fill='#f1807e', color='black')+
+  labs(x='District',y='CAGR') +
+    geom_text(aes(label = paste0(cagr,'%')), vjust = -0.5,hjust=-0.2, color = "white", size = 5) +
+
+    theme_minimal() +
+  coord_flip() +
+  theme(panel.grid.minor = element_blank()) # Remove grid lines
+```
+
+### Peak and Low Season for Hyderabad District
+
+```{r}
+month_wise_hyb = function(vis_df){
+  
+  month_wise_hyb_df <- vis_df %>%
+  filter(district == 'Hyderabad') %>%
+  group_by(district, month) %>%
+  summarize(visitors = sum(visitors))
+  
+  month_with_max_vis <- month_wise_hyb_df %>%
+  filter(visitors == max(visitors))
+  
+  month_with_min_vis <- month_wise_hyb_df %>%
+  filter(visitors == min(visitors))
+  
+  return (list('df'=month_wise_hyb_df, 'max_vis'=month_with_max_vis, 'min_vis'=month_with_min_vis))
+  
+}
+
+month_wise_hyb_dom <- month_wise_hyb(domestic_vis)
+month_wise_hyb_fore <- month_wise_hyb(foreign_vis)
+
+# Find the month with the maximum visitors
+month_with_max_vis_dom <- month_wise_hyb_dom$max_vis
+month_with_max_vis_fore <- month_wise_hyb_fore$max_vis
+
+# Find the month with the minimum visitors
+
+month_with_min_vis_dom <- month_wise_hyb_dom$min_vis
+month_with_mix_vis_fore <- month_wise_hyb_fore$min_vis
+```
+
+```
+Month with highest domestic visitors `r month_with_max_vis_dom$month` , visitors: `r round(month_with_max_vis_dom$visitors / 1000000,3)` Million
+
+Month with lowest Domestic visitors  `r month_with_min_vis_dom$month`, visitors: `r month_with_min_vis_dom$visitors`
+
+
+Month with highest Foreign visitors `r month_with_max_vis_fore$month` , visitors: `r round(month_with_max_vis_fore$visitors / 1000000,3)` Million
+
+Month with lowest Foreign visitors  `r month_with_mix_vis_fore$month`, visitors: `r month_with_mix_vis_fore$visitors`
+```
+
+```{r}
+# Create a mapping of month names to numeric values
+month_mapping <- c("January" = 1, "February" = 2, "March" = 3, "April" = 4,
+                   "May" = 5, "June" = 6, "July" = 7, "August" = 8,
+                   "September" = 9, "October" = 10, "November" = 11, "December" = 12)
+
+# Use dplyr to create a new numeric 'month_num' column
+month_wise_hyb_dom <- month_wise_hyb_dom$df %>%
+  mutate(month_num = match(month, names(month_mapping)))
+
+month_wise_hyb_fore <- month_wise_hyb_fore$df %>%
+  mutate(month_num = match(month, names(month_mapping)))
+
+# Create the time series plot using 'month_num' as x-axis
+dom_plot =ggplot(month_wise_hyb_dom, aes(x = month_num, y = visitors)) +
+  # geom_line() +
+  geom_line() +
+  geom_point(alpha=1) +
+  labs(title = "Total Monthly Domestic Visitors in Hyderabad",
+       x = "Month",
+       y = "Visitors") +
+  scale_x_continuous(breaks = 1:12, labels = names(month_mapping)) + # Customize x-axis labels
+  theme_minimal() +
+  theme( axis.text.x = element_text(angle = 45, hjust = 1) )
+
+fore_plot = ggplot(month_wise_hyb_fore, aes(x = month_num, y = visitors)) +
+  geom_line() +
+  geom_point(alpha=1) +
+  labs(title = "TOtal Monthly Foreign Visitors in Hyderabad",
+       x = "Month",
+       y = "Visitors") +
+  scale_x_continuous(breaks = 1:12, labels = names(month_mapping)) + # Customize x-axis labels
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+print(dom_plot)
+print(fore_plot)
+
+```
+
+
+### Year wise monthly trends of Top Districts
+```{r}
+
+month_wise_year_plot = function(vis_df, district_name) {
+  month_wise <- vis_df %>%
+    filter(district == district_name) %>%
+    group_by(district, month, year) %>%
+    summarize(visitors = sum(visitors,na.rm=T))
+  
+  # Create a mapping of month names to numeric values
+  month_mapping <- c("January" = 1, "February" = 2, "March" = 3, "April" = 4,
+                     "May" = 5, "June" = 6, "July" = 7, "August" = 8,
+                     "September" = 9, "October" = 10, "November" = 11, "December" = 12)
+  
+  # Use dplyr to create a new numeric 'month_num' column
+  month_wise <- month_wise %>%
+    mutate(month_num = match(month, names(month_mapping)))
+  
+  plot = ggplot(month_wise, aes(x = month_num, y = visitors, group = factor(year), color = factor(year))) +
+    geom_line() +
+      geom_point(alpha=1) +
+    labs(title = paste("Monthly Trendline of Visitors of ", district_name),
+         x = "Month",
+         y = "Number of Visitors",
+         color = "Year") +
+    scale_x_continuous(breaks = 1:12, labels = names(month_mapping)) +  # Customize x-axis labels
+    theme_minimal() + 
+    theme( axis.text.x = element_text(angle = 45, hjust = 1) )
+
+  return (plot)
+}
+  hyd_dom_plot = month_wise_year_plot(domestic_vis, "Hyderabad")
+  hyd_fore_plot = month_wise_year_plot(foreign_vis, "Hyderabad")
+  hyd_dom_plot
+  hyd_fore_plot
+  
+  mancherial_dom_plot = month_wise_year_plot(domestic_vis, "Mancherial")
+  mancherial_dom_plot
+  
+```
+  
+
+### Top and Bottom 3 district in terms of domestic to foreign tourist raito
+```{r}
+
+# Merge data frames on 'district', 'date', 'month', and 'year'
+dom_for_v <- inner_join(domestic_vis, foreign_vis, by = c('district', 'date', 'month', 'year'))
+
+# Rename columns if needed
+dom_for_v <- rename(dom_for_v, domestic_vis = visitors.x, foreign_vis = visitors.y)
+
+# Group by 'district' and calculate the sum of 'domestic_vis' and 'foreign_vis'
+dom_for_v_dis_sum <- dom_for_v %>%
+  group_by(district) %>%
+  summarise(domestic_vis = sum(domestic_vis,na.rm=T), foreign_vis = sum(foreign_vis,na.rm=T))
+
+# Remove rows where 'foreign_vis' is zero
+dom_for_v_dis_sum <- dom_for_v_dis_sum %>% filter(foreign_vis != 0)
+
+# Calculate the ratio of 'domestic_vis' to 'foreign_vis'
+dom_for_v_dis_sum <- dom_for_v_dis_sum %>%  mutate(dom_foreign_ratio = domestic_vis / foreign_vis)
+
+# Find the top 3 and bottom 3 districts based on 'dom_foreign_ratio'
+bottom_3_districts <- dom_for_v_dis_sum %>% arrange(desc(dom_foreign_ratio)) %>% select(district, dom_foreign_ratio) %>%  slice_head(n = 3)  
+top_3_districts <- dom_for_v_dis_sum %>% arrange(dom_foreign_ratio) %>% select(district, dom_foreign_ratio) %>% slice_head(n = 3)
+
+
+print(bottom_3_districts)
+
+ggplot(bottom_3_districts, aes(x= reorder(district, -dom_foreign_ratio),y=dom_foreign_ratio/1000000))+
+  geom_bar(stat='identity') +
+  labs( title = "Bottom 3 Districts ( Wrost domestic to foreign ratio)",
+        x = "District",
+        y = "Domestic to Foreign ratio (in Millions)")
+
+
+
+print(top_3_districts)
+
+ggplot(top_3_districts , aes(x= reorder(district, -dom_foreign_ratio),y=dom_foreign_ratio))+
+  geom_bar(stat='identity') +
+  labs( title = "Top 3 Districts ( Best domestic to foreign ratio)",
+        x = "District",
+        y = "Domestic to Foreign ratio")
+
+```
+
+### Population to Tourist footfall ratio
+```{r}
+
+population = read.csv('./population.csv')
+head(population)
+
+
+dom_for_v_dis_2019 = dom_for_v %>% filter(year == '2019')
+
+dom_for_v_dis_sum_2019= dom_for_v_dis_2019 %>%
+  group_by(district) %>%
+  summarise(domestic_vis = sum(domestic_vis,na.rm=T), foreign_vis = sum(foreign_vis,na.rm=T))
+
+data_with_population <- left_join(dom_for_v_dis_sum_2019, population, by = c('district'))
+
+
+
+dom_for_v_dis_sum_pop <- data_with_population %>%  mutate(dom_foreign_sum = domestic_vis + foreign_vis)
+dom_for_v_dis_sum_pop <- dom_for_v_dis_sum_pop %>% filter(dom_foreign_sum != 0)
+
+
+dom_for_v_dis_sum_pop <- dom_for_v_dis_sum_pop %>%
+                          mutate(dom_foreign_pop_ratio = dom_foreign_sum / Population_2019 )
+
+dom_for_v_dis_sum_pop_top5 = dom_for_v_dis_sum_pop %>% select(district,dom_foreign_pop_ratio) %>%
+                              arrange(desc(dom_foreign_pop_ratio)) %>%
+                                slice_head(n = 5)
+
+dom_for_v_dis_sum_pop_bottom5 = dom_for_v_dis_sum_pop %>% select(district,dom_foreign_pop_ratio) %>%
+  arrange(dom_foreign_pop_ratio) %>%
+  slice_head(n = 5)
+
+dom_for_v_dis_sum_pop_top5
+dom_for_v_dis_sum_pop_bottom5
+
+ggplot(dom_for_v_dis_sum_pop_top5 , aes(x= reorder(district, -dom_foreign_pop_ratio),y=dom_foreign_pop_ratio))+
+  geom_bar(stat='identity',fill='lightgreen',color='black') +
+  labs( title = "Top 5 Districts ( Best tourists to population ratio)",
+        x = "District",
+        y = "Tourists to population ratio)")
+
+ggplot(dom_for_v_dis_sum_pop_bottom5 , aes(x= reorder(district, -dom_foreign_pop_ratio),y=dom_foreign_pop_ratio))+
+  geom_bar(stat='identity',fill='#ffcccb',color='black') +
+  labs( title = "Bottom 5 Districts ( Best tourists to population ratio)",
+        x = "District",
+        y = "Tourists to population ratio)")
+
+```
+
+### Conclusion
+
+##### Hyderabad
+> Hyderabad is a major economic and cultural hub in South India, attracting a large number of domestic and foreign
+tourists to its historical landmarks and business centers. Must visit places 
+
+* Charminar
+* Golconda Fort
+* Qutb Shahi Tombs
+* Ramoji Film City
+
+
+##### Mancherial
+> Mancherial has strong contributions from coal mining and diverse industrial development, along with a favourable  climate for agriculture and significant infrastructure
+
+* Coal Mines and Singareni Collieries Company Limited (SCCL) areas
+* Kawal Tiger Reserve
+* Sri Satyanarayana Swamy Temple
+
+##### Rajanna Sircilla 
+> Rajanna Sircilla has high population to tourist footfall due to the handloom industry, Kargil Park, and the historical
+Sircilla Fort, and high population.
+
+
+* Sircilla Textile Park
+* Sri Raja Rajeshwara Swamy Devasthanam
+* Ananthagiri Fort
+
+##### Mulugu
+> Mulugu is a district with a high ratio of domestic tourists to foreign tourists, primarily due to its popularity as a  weekend getaway spot for locals and the presence of famous Hindu temples.
+
+
+* Ramappa Temple
+* Bogatha Waterfall
+* Medaram Jathara
+
+
+```{r}
+```
+
+[data_desc]: ./data_des.png "Data Description"
+[telangana_intro]: ./telangana_intro.png "Telangana Intro"
